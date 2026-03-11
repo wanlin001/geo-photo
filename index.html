@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>時空對位與軌跡影像誌 - Wan-Lin Hu</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        :root { --primary: #27ae60; --bg: #121212; --panel: #1e1e1e; --text: #e0e0e0; --accent: #2980b9; }
+        body { font-family: "Segoe UI", sans-serif; margin: 0; display: flex; height: 100vh; background: var(--bg); color: var(--text); overflow: hidden; }
+        #sidebar { width: 400px; display: flex; flex-direction: column; background: var(--panel); border-right: 1px solid #333; padding: 15px; box-sizing: border-box; overflow-y: auto; }
+        #map { flex-grow: 1; position: relative; }
+        .section-title { font-size: 13px; font-weight: 600; color: #888; margin-bottom: 8px; border-bottom: 1px solid #333; padding-bottom: 5px; margin-top: 15px; }
+        .control-group { margin-bottom: 12px; padding: 10px; background: #252525; border-radius: 8px; }
+        label { display: block; font-size: 11px; color: #aaa; margin-bottom: 3px; }
+        select, input, .btn-main { width: 100%; padding: 10px; border-radius: 4px; border: 1px solid #444; background: #333; color: white; cursor: pointer; font-size: 13px; box-sizing: border-box; }
+        .btn-main { background: var(--primary); border: none; font-weight: bold; margin-top: 5px; }
+        #log-console { background: #000; color: #0f0; padding: 8px; font-family: monospace; font-size: 10px; height: 60px; overflow-y: auto; border-radius: 4px; flex-shrink: 0; }
+        #chart-container { background: #000; border-radius: 8px; padding: 5px; height: 140px; border: 1px solid #333; flex-shrink: 0; margin-top: 10px; }
+        .item { display: flex; align-items: center; gap: 10px; background: #2a2a2a; margin-bottom: 8px; padding: 6px; border-radius: 6px; cursor: pointer; border-left: 5px solid #c0392b; font-size: 12px; }
+        .item.matched { border-left-color: var(--primary); }
+        .thumb-box { width: 45px; height: 45px; flex-shrink: 0; overflow: hidden; border-radius: 3px; }
+        .thumb-box img, .thumb-box video { width: 100%; height: 100%; object-fit: cover; }
+        .map-thumb { border: 2px solid white; border-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.5); object-fit: cover; background: #000; }
+    </style>
+</head>
+<body>
+
+<div id="sidebar">
+    <h2 style="margin:0; color:white; font-size: 1.4em;">時空對位與軌跡影像誌</h2>
+    <p style="font-size:11px; color:#666; margin:0 0 10px 0;">Creator: Wan-Lin Hu</p>
+    <div id="log-console">系統日誌：等待導入踏查資料夾...</div>
+
+    <div class="section-title">1. 時間校準設定</div>
+    <div class="control-group">
+        <label>媒體時間讀取來源</label>
+        <select id="timeSrc">
+            <option value="name" selected>依據檔案名稱 (YYYYMMDD_HHMMSS)</option>
+            <option value="sys">依據檔案系統時間</option>
+        </select>
+        <label style="margin-top:10px;">GPX 時區偏移 (台灣選 +8)</label>
+        <select id="gpxTz">
+            <option value="0">UTC +0 (標準/Garmin)</option>
+            <option value="8" selected>UTC +8 (台灣 / 日本-1)</option>
+            <option value="2">UTC +2 (歐洲夏令時)</option>
+        </select>
+    </div>
+
+    <div class="section-title">2. 資料導入 (WebP/MP4/GPX)</div>
+    <button class="btn-main" onclick="document.getElementById('dirInput').click()">📁 選取 GitHub 同級資料夾</button>
+    <input type="file" id="dirInput" webkitdirectory directory multiple style="display:none;">
+
+    <div class="section-title">3. 高度剖面分析</div>
+    <div id="chart-container"><canvas id="elevationChart"></canvas></div>
+
+    <div class="section-title">4. 專案媒體列表</div>
+    <div id="file-list"></div>
+</div>
+
+<div id="map"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<script>
+    const map = L.map('map', { zoomControl: false }).setView([23.5, 121], 7);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+    L.control.zoom({ position: 'bottomright' }).addTo(map);
+
+    let gpxPoints = [], chart;
+    const photoGroup = L.featureGroup().addTo(map);
+    const trackGroup = L.featureGroup().addTo(map);
+    const leaderLines = L.featureGroup().addTo(map);
+    let hoverMarker = L.circleMarker([0,0], {radius: 7, color: 'red', fillColor: 'white', fillOpacity: 1, weight: 3}).addTo(map);
+
+    function log(msg) {
+        const c = document.getElementById('log-console');
+        c.innerHTML += `> ${msg}<br>`;
+        c.scrollTop = c.scrollHeight;
+    }
+
+    function parseMediaTime(file, source) {
+        if (source === 'name') {
+            const regex = /(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/;
+            const m = file.name.match(regex);
+            if (m) return new Date(m[1], m[2]-1, m[3], m[4], m[5], m[6]).getTime();
+        }
+        return file.lastModified;
+    }
+
+    document.getElementById('dirInput').onchange = async (e) => {
+        const files = Array.from(e.target.files);
+        log(`讀取中: ${files.length} 個檔案...`);
+        const gpxFiles = files.filter(f => f.name.toLowerCase().endsWith('.gpx'));
+        const mediaFiles = files.filter(f => /\.(webp|jpg|mp4)$/i.test(f.name));
+        const tz = parseInt(document.getElementById('gpxTz').value);
+        const timeSrc = document.getElementById('timeSrc').value;
+
+        gpxPoints = []; trackGroup.clearLayers(); photoGroup.clearLayers(); leaderLines.clearLayers();
+        document.getElementById('file-list').innerHTML = '';
+
+        for (let f of gpxFiles) {
+            const xml = new DOMParser().parseFromString(await f.text(), "text/xml");
+            const trkpts = Array.from(xml.getElementsByTagName("trkpt"));
+            let dist = 0;
+            const pts = trkpts.map((pt, i) => {
+                const lat = parseFloat(pt.getAttribute("lat")), lon = parseFloat(pt.getAttribute("lon"));
+                const ele = pt.getElementsByTagName("ele")[0] ? parseFloat(pt.getElementsByTagName("ele")[0].textContent) : 0;
+                const time = new Date(pt.getElementsByTagName("time")[0].textContent).getTime() + (tz * 3600000);
+                if (i > 0) dist += map.distance([trkpts[i-1].getAttribute("lat"), trkpts[i-1].getAttribute("lon")], [lat, lon]) / 1000;
+                return { lat, lon, ele, time, dist };
+            });
+            gpxPoints = gpxPoints.concat(pts);
+            L.polyline(pts.map(p => [p.lat, p.lon]), {color: '#3498db', weight: 4}).addTo(trackGroup);
+        }
+
+        const locationMap = new Map();
+        for (let f of mediaFiles) {
+            const pTime = parseMediaTime(f, timeSrc);
+            const isVideo = f.name.toLowerCase().endsWith('.mp4');
+            const url = URL.createObjectURL(f);
+            let closest = gpxPoints.reduce((p, c) => Math.abs(c.time - pTime) < Math.abs(p.time - pTime) ? c : p);
+            const isOk = closest && Math.abs(closest.time - pTime) < 1200000;
+
+            if (isOk) {
+                let fLat = closest.lat, fLon = closest.lon;
+                const key = `${fLat.toFixed(5)},${fLon.toFixed(5)}`;
+                if (locationMap.has(key)) {
+                    fLat += (Math.random() - 0.5) * 0.0006; fLon += (Math.random() - 0.5) * 0.0006;
+                    L.polyline([[closest.lat, closest.lon], [fLat, fLon]], {color: '#888', weight: 1, dashArray: '5,5'}).addTo(leaderLines);
+                }
+                locationMap.set(key, true);
+
+                const icon = L.divIcon({ html: isVideo ? `<div class="map-thumb" style="width:40px; height:40px; color:white; display:flex; align-items:center; justify-content:center;">🎥</div>` : `<img src="${url}" class="map-thumb" style="width:40px; height:40px;">`, iconSize: [40, 40], className: '' });
+                const m = L.marker([fLat, fLon], {icon}).addTo(photoGroup);
+                m.bindPopup(`<b>${f.name}</b><br>${isVideo ? `<video src="${url}" controls width="250"></video>` : `<img src="${url}" width="250">`}`);
+            }
+
+            const div = document.createElement('div');
+            div.className = `item ${isOk ? 'matched' : ''}`;
+            div.innerHTML = `<div class="thumb-box">${isVideo ? '<video src="'+url+'"></video>' : '<img src="'+url+'">'}</div><div><b>${f.name}</b></div>`;
+            if(isOk) div.onclick = () => { map.flyTo([closest.lat, closest.lon], 17); };
+            document.getElementById('file-list').appendChild(div);
+        }
+        if (gpxPoints.length > 0) { map.fitBounds(trackGroup.getBounds()); initChart(gpxPoints); }
+    };
+
+    function initChart(pts) {
+        if (chart) chart.destroy();
+        chart = new Chart(document.getElementById('elevationChart'), {
+            type: 'line',
+            data: { labels: pts.map(p => p.dist.toFixed(2)), datasets: [{ data: pts.map(p => p.ele), borderColor: '#3498db', fill: true, backgroundColor: 'rgba(52,152,219,0.2)', pointRadius: 0 }] },
+            options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, onHover: (e, elem) => { if (elem.length > 0) hoverMarker.setLatLng([pts[elem[0].index].lat, pts[elem[0].index].lng]); }, scales: { x: { display: false } } }
+        });
+    }
+</script>
+</body>
+</html>
