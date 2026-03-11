@@ -15,60 +15,49 @@
         select, input, .btn-main { width: 100%; padding: 10px; border-radius: 4px; border: 1px solid #444; background: #333; color: white; cursor: pointer; font-size: 13px; box-sizing: border-box; }
         .btn-main { background: var(--primary); border: none; font-weight: bold; margin-top: 5px; }
         .btn-export { background: var(--accent); margin-top: 8px; display: none; }
-
-        #progress-container { width: 100%; background: #000; height: 10px; border-radius: 5px; margin: 10px 0; display: none; overflow: hidden; }
-        #progress-bar { width: 0%; height: 100%; background: var(--primary); transition: width 0.2s; }
-
         #log-console { background: #000; color: #0f0; padding: 8px; font-family: monospace; font-size: 10px; height: 60px; overflow-y: auto; border-radius: 4px; flex-shrink: 0; }
         #chart-container { background: #000; border-radius: 8px; padding: 5px; height: 140px; border: 1px solid #333; flex-shrink: 0; margin-top: 10px; }
-        #file-list { margin-top: 10px; }
         .item { display: flex; align-items: center; gap: 10px; background: #2a2a2a; margin-bottom: 8px; padding: 6px; border-radius: 6px; cursor: pointer; border-left: 5px solid #c0392b; font-size: 12px; }
         .item.matched { border-left-color: var(--primary); }
-        .item .thumb-container { width: 45px; height: 45px; position: relative; background: #000; overflow: hidden; border-radius: 3px; }
+        .thumb-container { width: 45px; height: 45px; position: relative; background: #000; overflow: hidden; border-radius: 3px; }
         .item img, .item video { width: 100%; height: 100%; object-fit: cover; }
-        .video-icon { position: absolute; bottom: 2px; right: 2px; font-size: 10px; background: rgba(0,0,0,0.7); padding: 1px 3px; border-radius: 2px; color: white; }
-        .map-thumb { border: 2px solid white; border-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.5); object-fit: cover; background: #000; }
+        .map-thumb { border: 2px solid white; border-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.5); object-fit: cover; }
     </style>
 </head>
 <body>
 
 <div id="sidebar">
     <h2 style="margin:0; color:white; font-size: 1.4em;">時空對位分析工具</h2>
-    <p style="font-size:11px; color:#666; margin:0 0 10px 0;">Creator: Wan-Lin Hu | 地學踏查專用</p>
+    <p style="font-size:11px; color:#666; margin:0 0 10px 0;">Creator: Wan-Lin Hu | 地學踏查專業版</p>
 
-    <div id="log-console">系統日誌：等待導入資料夾...</div>
-    <div id="progress-container"><div id="progress-bar"></div></div>
+    <div id="log-console">系統日誌：等待導入裝有檔案的資料夾 (Folder)...</div>
 
     <div class="section-title">1. 時間校準設定</div>
     <div class="control-group">
         <label>媒體時間讀取來源</label>
         <select id="timeSrc">
             <option value="name" selected>依據檔案名稱 (YYYYMMDD_HHMMSS)</option>
-            <option value="sys">依據檔案系統時間</option>
+            <option value="sys">依據檔案建立時間 (Creation Time)</option>
         </select>
-        <label style="margin-top:10px;">GPX 時區偏移 (台灣選 +8)</label>
-        <select id="gpxTz">
-            <option value="0">UTC +0 (標準/Garmin)</option>
+        <label style="margin-top:10px;">相機/手機時區 (用於對齊 UTC GPX)</label>
+        <select id="mediaTz">
             <option value="8" selected>UTC +8 (台灣 / 日本-1)</option>
+            <option value="0">UTC +0 (格林威治)</option>
             <option value="2">UTC +2 (歐洲夏令時)</option>
         </select>
     </div>
 
-    <div class="section-title">2. 資料導入 (支援 WebP/JPG/MP4)</div>
-    <button class="btn-main" onclick="document.getElementById('dirInput').click()">📁 選取專案資料夾</button>
+    <div class="section-title">2. 資料導入</div>
+    <button class="btn-main" onclick="document.getElementById('dirInput').click()">📁 選取裝有檔案的資料夾 (Folder)</button>
     <input type="file" id="dirInput" webkitdirectory directory multiple style="display:none;">
 
     <div class="section-title">3. 高度剖面分析</div>
     <div id="chart-container"><canvas id="elevationChart"></canvas></div>
 
     <div class="section-title">4. 成果導出</div>
-    <div class="control-group">
-        <input type="text" id="projectName" placeholder="專案名稱 - 日期">
-        <select id="exportFormat" style="margin-top:5px;"><option value="kmz">KMZ (包含多媒體打包)</option><option value="kml">KML (純文本)</option></select>
-    </div>
-    <button class="btn-main btn-export" id="exportBtn">💾 執行導出 (KMZ/KML)</button>
+    <button class="btn-main btn-export" id="exportBtn">💾 執行專案導出 (KMZ)</button>
 
-    <div class="section-title">5. 多媒體列表 (點擊地圖同步)</div>
+    <div class="section-title">5. 多媒體列表</div>
     <div id="file-list"></div>
 </div>
 
@@ -95,29 +84,14 @@
         c.scrollTop = c.scrollHeight;
     }
 
-    function updateProgress(percent) {
-        const pc = document.getElementById('progress-container');
-        const pb = document.getElementById('progress-bar');
-        pc.style.display = 'block';
-        pb.style.width = percent + '%';
-        if (percent >= 100) setTimeout(() => pc.style.display = 'none', 1000);
-    }
-
+    // 解析媒體時間
     function parseMediaTime(file, source) {
         if (source === 'name') {
             const regex = /(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/;
             const m = file.name.match(regex);
             if (m) return new Date(m[1], m[2]-1, m[3], m[4], m[5], m[6]).getTime();
         }
-        return file.lastModified;
-    }
-
-    function calcDist(p1, p2) {
-        const R = 6371;
-        const dLat = (p2.lat - p1.lat) * Math.PI / 180;
-        const dLon = (p2.lon - p1.lon) * Math.PI / 180;
-        const a = Math.sin(dLat/2)**2 + Math.cos(p1.lat*Math.PI/180) * Math.cos(p2.lat*Math.PI/180) * Math.sin(dLon/2)**2;
-        return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        return file.lastModified; // 檔案建立/修改時間
     }
 
     document.getElementById('dirInput').onchange = async (e) => {
@@ -126,137 +100,80 @@
 
         objectUrls.forEach(url => URL.revokeObjectURL(url));
         objectUrls = [];
+        log(`讀取資料夾中...`);
 
-        log(`讀取專案中...`);
         const gpxFiles = files.filter(f => f.name.toLowerCase().endsWith('.gpx'));
-        // 核心更新：加入 webp 支援
-        const mediaFiles = files.filter(f => /\.(jpg|jpeg|png|webp|mp4)$/i.test(f.name));
+        const mediaFiles = files.filter(f => /\.(jpg|jpeg|webp|mp4)$/i.test(f.name));
         const timeSrc = document.getElementById('timeSrc').value;
-        const tz = parseInt(document.getElementById('gpxTz').value);
+        const mediaTzOffset = parseInt(document.getElementById('mediaTz').value) * 3600000;
 
-        gpxPoints = []; rawMediaFiles = [];
-        trackGroup.clearLayers(); photoGroup.clearLayers(); leaderLines.clearLayers();
+        gpxPoints = []; trackGroup.clearLayers(); photoGroup.clearLayers(); leaderLines.clearLayers();
         document.getElementById('file-list').innerHTML = '';
 
+        // 1. 解析 GPX (保持原始 UTC+0)
         for (let f of gpxFiles) {
             const xml = new DOMParser().parseFromString(await f.text(), "text/xml");
-            const trkpts = xml.getElementsByTagName("trkpt");
-            let dist = 0; const pts = [];
-            for (let i = 0; i < trkpts.length; i++) {
-                const pt = trkpts[i];
+            const trkpts = Array.from(xml.getElementsByTagName("trkpt"));
+            let dist = 0;
+            const pts = trkpts.map((pt, i) => {
                 const lat = parseFloat(pt.getAttribute("lat")), lon = parseFloat(pt.getAttribute("lon"));
                 const ele = pt.getElementsByTagName("ele")[0] ? parseFloat(pt.getElementsByTagName("ele")[0].textContent) : 0;
-                const time = new Date(pt.getElementsByTagName("time")[0].textContent).getTime() + (tz * 3600000);
-                if (i > 0) dist += calcDist(pts[i-1], {lat, lon});
-                pts.push({ lat, lon, ele, time, dist });
-            }
+                // Garmin 預設是 UTC+0
+                const time = new Date(pt.getElementsByTagName("time")[0].textContent).getTime();
+                if (i > 0) {
+                    const prev = {lat: parseFloat(trkpts[i-1].getAttribute("lat")), lon: parseFloat(trkpts[i-1].getAttribute("lon"))};
+                    dist += map.distance([prev.lat, prev.lon], [lat, lon]) / 1000;
+                }
+                return { lat, lon, ele, time, dist };
+            });
             gpxPoints = gpxPoints.concat(pts);
             L.polyline(pts.map(p => [p.lat, p.lon]), {color: '#3498db', weight: 4}).addTo(trackGroup);
         }
 
-        if (gpxPoints.length > 0) {
-            document.getElementById('projectName').value = `Project - ${new Date(gpxPoints[0].time).toISOString().split('T')[0]}`;
-            initChart(gpxPoints);
-        }
-
+        // 2. 對位媒體 (將媒體時間轉為 UTC 以對齊 GPX)
         const locationMap = new Map();
-
-        for (let i = 0; i < mediaFiles.length; i++) {
-            const f = mediaFiles[i];
-            const pTime = parseMediaTime(f, timeSrc);
-            const isVideo = f.name.toLowerCase().endsWith('.mp4');
+        for (let f of mediaFiles) {
+            let pTimeLocal = parseMediaTime(f, timeSrc);
+            // 將照片當地時間轉為 UTC 基準來找 GPX
+            let pTimeUtc = pTimeLocal - mediaTzOffset;
+            
             const url = URL.createObjectURL(f);
             objectUrls.push(url);
+            const isVideo = f.name.toLowerCase().endsWith('.mp4');
 
-            let closest = gpxPoints.length > 0 ? gpxPoints.reduce((p, c) => Math.abs(c.time - pTime) < Math.abs(p.time - pTime) ? c : p) : null;
-            const isOk = closest && Math.abs(closest.time - pTime) < 1200000;
+            let closest = gpxPoints.length > 0 ? gpxPoints.reduce((p, c) => Math.abs(c.time - pTimeUtc) < Math.abs(p.time - pTimeUtc) ? c : p) : null;
+            const isOk = closest && Math.abs(closest.time - pTimeUtc) < 1200000;
 
             if (isOk) {
-                let finalLat = closest.lat, finalLon = closest.lon;
-                const key = `${finalLat.toFixed(5)},${finalLon.toFixed(5)}`;
-
+                let fLat = closest.lat, fLon = closest.lon;
+                const key = `${fLat.toFixed(5)},${fLon.toFixed(5)}`;
                 if (locationMap.has(key)) {
-                    finalLat += (Math.random() - 0.5) * 0.0006;
-                    finalLon += (Math.random() - 0.5) * 0.0006;
-                    L.polyline([[closest.lat, closest.lon], [finalLat, finalLon]], {color: '#888', weight: 1, dashArray: '5, 5'}).addTo(leaderLines);
-                } else {
-                    locationMap.set(key, 1);
+                    fLat += (Math.random() - 0.5) * 0.0006; fLon += (Math.random() - 0.5) * 0.0006;
+                    L.polyline([[closest.lat, closest.lon], [fLat, fLon]], {color: '#888', weight: 1, dashArray: '5,5'}).addTo(leaderLines);
                 }
+                locationMap.set(key, true);
 
-                const icon = L.divIcon({
-                    html: isVideo ? `<div class="map-thumb" style="width:40px; height:40px; color:white; display:flex; align-items:center; justify-content:center;">🎥</div>` : `<img src="${url}" class="map-thumb" style="width:40px; height:40px;">`,
-                    iconSize: [40, 40], className: ''
-                });
-                const m = L.marker([finalLat, finalLon], {icon}).addTo(photoGroup);
-                m.bindPopup(`<b>${f.name}</b><br>${isVideo ? `<video src="${url}" controls style="width:250px"></video>` : `<img src="${url}" style="width:250px">`}`);
-
-                rawMediaFiles.push({ file: f, lat: finalLat, lon: finalLon, ele: closest.ele, isVideo });
+                const icon = L.divIcon({ html: isVideo ? `<div class="map-thumb" style="width:40px; height:40px; color:white; display:flex; align-items:center; justify-content:center; background:#000;">🎥</div>` : `<img src="${url}" class="map-thumb" style="width:40px; height:40px;">`, iconSize: [40, 40], className: '' });
+                const m = L.marker([fLat, fLon], {icon}).addTo(photoGroup);
+                m.bindPopup(`<b>${f.name}</b><br>${isVideo ? `<video src="${url}" controls width="250"></video>` : `<img src="${url}" width="250">`}`);
+                rawMediaFiles.push({ file: f, lat: fLat, lon: fLon, ele: closest.ele, isVideo });
             }
 
             const div = document.createElement('div');
             div.className = `item ${isOk ? 'matched' : ''}`;
-            div.innerHTML = `<div class="thumb-container">${isVideo ? '<video src="'+url+'"></video><span class="video-icon">MP4</span>' : '<img src="'+url+'">'}</div><div><b>${f.name}</b><br><span>${isOk ? '對位成功' : '時間不匹配'}</span></div>`;
+            div.innerHTML = `<div class="thumb-container">${isVideo ? '<video src="'+url+'"></video>' : '<img src="'+url+'">'}</div><div><b>${f.name}</b></div>`;
+            if(isOk) div.onclick = () => map.flyTo([closest.lat, closest.lon], 17);
             document.getElementById('file-list').appendChild(div);
-            if(isOk) div.onclick = () => { map.flyTo([finalLat, finalLon], 17); };
-
-            updateProgress(((i + 1) / mediaFiles.length) * 100);
         }
-
-        if (gpxPoints.length > 0) {
-            map.fitBounds(trackGroup.getBounds());
-            document.getElementById('exportBtn').style.display = 'block';
-            log(`導入完成！${rawMediaFiles.length} 個媒體已對位`);
-        }
+        if (gpxPoints.length > 0) { map.fitBounds(trackGroup.getBounds()); initChart(gpxPoints); document.getElementById('exportBtn').style.display = 'block'; log(`導入完成！已自動對位。`); }
     };
-
-    async function doExport() {
-        const zip = new JSZip();
-        const fmt = document.getElementById('exportFormat').value;
-        const projName = document.getElementById('projectName').value || "Project";
-        updateProgress(10);
-
-        let kml = `<?xml version="1.0" encoding="UTF-8"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>${projName}</name><Placemark><name>Track</name><LineString><coordinates>${gpxPoints.map(p => `${p.lon},${p.lat},${p.ele}`).join(' ')}</coordinates></LineString></Placemark>`;
-
-        for (let i = 0; i < rawMediaFiles.length; i++) {
-            const m = rawMediaFiles[i];
-            const path = fmt === 'kmz' ? `media/${m.file.name}` : m.file.name;
-            const desc = m.isVideo ? `<video src="${path}" width="400" controls/>` : `<img src="${path}" width="400"/>`;
-            kml += `<Placemark><name>${m.file.name}</name><description><![CDATA[${desc}]]></description><Point><coordinates>${m.lon},${m.lat},${m.ele}</coordinates></Point></Placemark>`;
-            if (fmt === 'kmz') zip.file(`media/${m.file.name}`, await m.file.arrayBuffer());
-            updateProgress(10 + (i / rawMediaFiles.length) * 80);
-        }
-        kml += `</Document></kml>`;
-
-        if (fmt === 'kmz') {
-            zip.file("doc.kml", kml);
-            saveFile(await zip.generateAsync({type:"blob"}), `${projName}.kmz`);
-        } else {
-            saveFile(new Blob([kml], {type: "application/vnd.google-earth.kml+xml"}), `${projName}.kml`);
-        }
-        updateProgress(100);
-    }
-
-    function saveFile(blob, name) {
-        const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click();
-    }
-
-    document.getElementById('exportBtn').onclick = doExport;
 
     function initChart(pts) {
         if (chart) chart.destroy();
-        const ctx = document.getElementById('elevationChart').getContext('2d');
-        chart = new Chart(ctx, {
+        chart = new Chart(document.getElementById('elevationChart'), {
             type: 'line',
-            data: {
-                labels: pts.map(p => p.dist.toFixed(2)),
-                datasets: [{ data: pts.map(p => p.ele), borderColor: '#3498db', backgroundColor: 'rgba(52,152,219,0.2)', fill: true, pointRadius: 0, borderWidth: 2 }]
-            },
-            options: {
-                responsive: true, maintainAspectRatio: false,
-                plugins: { legend: { display: false } },
-                scales: { x: { display: false }, y: { ticks: { color: '#666', font: {size: 10} } } },
-                onHover: (e, elements) => { if (elements.length > 0) hoverMarker.setLatLng([pts[elements[0].index].lat, pts[elements[0].index].lon]); }
-            }
+            data: { labels: pts.map(p => p.dist.toFixed(2)), datasets: [{ data: pts.map(p => p.ele), borderColor: '#3498db', fill: true, backgroundColor: 'rgba(52,152,219,0.2)', pointRadius: 0 }] },
+            options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, onHover: (e, elem) => { if (elem.length > 0) hoverMarker.setLatLng([pts[elem[0].index].lat, pts[elem[0].index].lon]); }, scales: { x: { display: false } } }
         });
     }
 </script>
