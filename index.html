@@ -15,12 +15,15 @@
         select, input, .btn-main { width: 100%; padding: 10px; border-radius: 4px; border: 1px solid #444; background: #333; color: white; cursor: pointer; font-size: 13px; box-sizing: border-box; }
         .btn-main { background: var(--primary); border: none; font-weight: bold; margin-top: 5px; }
         .btn-export { background: var(--accent); margin-top: 8px; display: none; }
+        #progress-container { width: 100%; background: #000; height: 8px; border-radius: 4px; margin: 10px 0; display: none; overflow: hidden; }
+        #progress-bar { width: 0%; height: 100%; background: var(--primary); transition: width 0.2s; }
         #log-console { background: #000; color: #0f0; padding: 8px; font-family: monospace; font-size: 10px; height: 60px; overflow-y: auto; border-radius: 4px; flex-shrink: 0; }
         #chart-container { background: #000; border-radius: 8px; padding: 5px; height: 140px; border: 1px solid #333; flex-shrink: 0; margin-top: 10px; }
         .item { display: flex; align-items: center; gap: 10px; background: #2a2a2a; margin-bottom: 8px; padding: 6px; border-radius: 6px; cursor: pointer; border-left: 5px solid #c0392b; font-size: 12px; }
         .item.matched { border-left-color: var(--primary); }
         .thumb-container { width: 45px; height: 45px; position: relative; background: #000; overflow: hidden; border-radius: 3px; }
         .item img, .item video { width: 100%; height: 100%; object-fit: cover; }
+        .video-icon { position: absolute; bottom: 2px; right: 2px; font-size: 10px; background: rgba(0,0,0,0.7); padding: 1px 3px; border-radius: 2px; color: white; }
         .map-thumb { border: 2px solid white; border-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.5); object-fit: cover; }
     </style>
 </head>
@@ -30,21 +33,22 @@
     <h2 style="margin:0; color:white; font-size: 1.4em;">時空對位分析工具</h2>
     <p style="font-size:11px; color:#666; margin:0 0 10px 0;">Creator: Wan-Lin Hu | 地學踏查專業版</p>
 
-    <div id="log-console">系統日誌：等待導入裝有檔案的資料夾 (Folder)...</div>
+    <div id="log-console">系統日誌：等待導入 Folder...</div>
+    <div id="progress-container"><div id="progress-bar"></div></div>
 
-    <div class="section-title">1. 時間校準設定 (GPX 預設 UTC+0)</div>
+    <div class="section-title">1. 時間校準 (GPX 預設 UTC+0)</div>
     <div class="control-group">
-        <label>媒體時間讀取來源</label>
+        <label>媒體時間來源</label>
         <select id="timeSrc">
             <option value="name" selected>依據檔案名稱 (YYYYMMDD_HHMMSS)</option>
             <option value="sys">依據檔案建立時間 (Creation Time)</option>
         </select>
-        <label style="margin-top:10px;">媒體拍攝地時區 (對齊航跡用)</label>
+        <label style="margin-top:10px;">媒體拍攝地時區 (台灣選 +8)</label>
         <select id="mediaTz">
             <option value="8" selected>UTC +8 (台灣 / 日本-1)</option>
-            <option value="0">UTC +0 (標準/格林威治)</option>
+            <option value="0">UTC +0 (格林威治)</option>
             <option value="2">UTC +2 (歐洲夏令時)</option>
-            <option value="-8">UTC -8 (美國太平洋)</option>
+            <option value="9">UTC +9 (日本 / 韓國)</option>
         </select>
     </div>
 
@@ -56,9 +60,13 @@
     <div id="chart-container"><canvas id="elevationChart"></canvas></div>
 
     <div class="section-title">4. 成果導出</div>
-    <button class="btn-main btn-export" id="exportBtn">💾 執行專案導出 (KMZ)</button>
+    <div class="control-group">
+        <input type="text" id="projectName" placeholder="專案名稱">
+        <select id="exportFormat" style="margin-top:5px;"><option value="kmz">KMZ (包含影像打包)</option><option value="kml">KML (純文本)</option></select>
+    </div>
+    <button class="btn-main btn-export" id="exportBtn">💾 執行導出</button>
 
-    <div class="section-title">5. 多媒體列表</div>
+    <div class="section-title">5. 多媒體列表 (點擊地圖同步)</div>
     <div id="file-list"></div>
 </div>
 
@@ -85,13 +93,21 @@
         c.scrollTop = c.scrollHeight;
     }
 
+    function updateProgress(percent) {
+        const pc = document.getElementById('progress-container');
+        const pb = document.getElementById('progress-bar');
+        pc.style.display = 'block';
+        pb.style.width = percent + '%';
+        if (percent >= 100) setTimeout(() => pc.style.display = 'none', 1000);
+    }
+
     function parseMediaTime(file, source) {
         if (source === 'name') {
             const regex = /(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/;
             const m = file.name.match(regex);
             if (m) return new Date(m[1], m[2]-1, m[3], m[4], m[5], m[6]).getTime();
         }
-        return file.lastModified; 
+        return file.lastModified;
     }
 
     document.getElementById('dirInput').onchange = async (e) => {
@@ -103,14 +119,16 @@
         log(`讀取資料夾中...`);
 
         const gpxFiles = files.filter(f => f.name.toLowerCase().endsWith('.gpx'));
-        const mediaFiles = files.filter(f => /\.(jpg|jpeg|webp|mp4)$/i.test(f.name));
+        // 核心更新：加入 WebP
+        const mediaFiles = files.filter(f => /\.(jpg|jpeg|webp|png|mp4)$/i.test(f.name));
         const timeSrc = document.getElementById('timeSrc').value;
+        // 媒體時區偏移 (用於回推 UTC)
         const mediaTzOffset = parseInt(document.getElementById('mediaTz').value) * 3600000;
 
         gpxPoints = []; trackGroup.clearLayers(); photoGroup.clearLayers(); leaderLines.clearLayers();
         document.getElementById('file-list').innerHTML = '';
 
-        // 1. 解析 GPX (航跡永遠保持 UTC+0 物理紀錄)
+        // 1. 解析航跡 (GPX 預設為 UTC+0)
         for (let f of gpxFiles) {
             const xml = new DOMParser().parseFromString(await f.text(), "text/xml");
             const trkpts = Array.from(xml.getElementsByTagName("trkpt"));
@@ -118,12 +136,11 @@
             const pts = trkpts.map((pt, i) => {
                 const lat = parseFloat(pt.getAttribute("lat")), lon = parseFloat(pt.getAttribute("lon"));
                 const ele = pt.getElementsByTagName("ele")[0] ? parseFloat(pt.getElementsByTagName("ele")[0].textContent) : 0;
-                // 直接讀取原始 UTC 時間戳
+                // 直接解析標準 UTC 時間
                 const time = new Date(pt.getElementsByTagName("time")[0].textContent).getTime();
                 if (i > 0) {
-                    const prevLat = parseFloat(trkpts[i-1].getAttribute("lat"));
-                    const prevLon = parseFloat(trkpts[i-1].getAttribute("lon"));
-                    dist += map.distance([prevLat, prevLon], [lat, lon]) / 1000;
+                    const prev = {lat: parseFloat(trkpts[i-1].getAttribute("lat")), lon: parseFloat(trkpts[i-1].getAttribute("lon"))};
+                    dist += map.distance([prev.lat, prev.lon], [lat, lon]) / 1000;
                 }
                 return { lat, lon, ele, time, dist };
             });
@@ -131,11 +148,13 @@
             L.polyline(pts.map(p => [p.lat, p.lon]), {color: '#3498db', weight: 4}).addTo(trackGroup);
         }
 
-        // 2. 對位媒體 (將媒體時間轉為 UTC 以匹配航跡)
+        // 2. 對位媒體
         const locationMap = new Map();
-        for (let f of mediaFiles) {
-            let pTimeLocal = parseMediaTime(f, timeSrc);
-            let pTimeUtc = pTimeLocal - mediaTzOffset;
+        for (let i = 0; i < mediaFiles.length; i++) {
+            const f = mediaFiles[i];
+            const pTimeLocal = parseMediaTime(f, timeSrc);
+            // 轉換為 UTC 與 GPX 對齊
+            const pTimeUtc = pTimeLocal - mediaTzOffset;
             
             const url = URL.createObjectURL(f);
             objectUrls.push(url);
@@ -153,7 +172,10 @@
                 }
                 locationMap.set(key, true);
 
-                const icon = L.divIcon({ html: isVideo ? `<div class="map-thumb" style="width:40px; height:40px; color:white; display:flex; align-items:center; justify-content:center; background:#000;">🎥</div>` : `<img src="${url}" class="map-thumb" style="width:40px; height:40px;">`, iconSize: [40, 40], className: '' });
+                const icon = L.divIcon({ 
+                    html: isVideo ? `<div class="map-thumb" style="width:40px; height:40px; color:white; display:flex; align-items:center; justify-content:center; background:#000;">🎥</div>` : `<img src="${url}" class="map-thumb" style="width:40px; height:40px;">`, 
+                    iconSize: [40, 40], className: '' 
+                });
                 const m = L.marker([fLat, fLon], {icon}).addTo(photoGroup);
                 m.bindPopup(`<b>${f.name}</b><br>${isVideo ? `<video src="${url}" controls width="250"></video>` : `<img src="${url}" width="250">`}`);
                 rawMediaFiles.push({ file: f, lat: fLat, lon: fLon, ele: closest.ele, isVideo });
@@ -161,16 +183,37 @@
 
             const div = document.createElement('div');
             div.className = `item ${isOk ? 'matched' : ''}`;
-            div.innerHTML = `<div class="thumb-container">${isVideo ? '<video src="'+url+'"></video>' : '<img src="'+url+'">'}</div><div><b>${f.name}</b></div>`;
-            if(isOk) div.onclick = () => map.flyTo([closest.lat, closest.lon], 17);
+            div.innerHTML = `<div class="thumb-container">${isVideo ? '<video src="'+url+'"></video><span class="video-icon">MP4</span>' : '<img src="'+url+'">'}</div><div><b>${f.name}</b><br><span>${isOk ? '對位成功' : '時間不匹配'}</span></div>`;
+            if(isOk) div.onclick = () => map.flyTo([fLat, fLon], 17);
             document.getElementById('file-list').appendChild(div);
+            updateProgress(((i + 1) / mediaFiles.length) * 100);
         }
+
         if (gpxPoints.length > 0) { 
             map.fitBounds(trackGroup.getBounds()); 
             initChart(gpxPoints); 
             document.getElementById('exportBtn').style.display = 'block'; 
-            log(`導入完成！航跡與媒體已同步。`); 
+            log(`對位完成！GPX 基調: UTC+0`); 
         }
+    };
+
+    // KMZ 導出邏輯
+    document.getElementById('exportBtn').onclick = async () => {
+        const zip = new JSZip();
+        const projName = document.getElementById('projectName').value || "Project";
+        let kml = `<?xml version="1.0" encoding="UTF-8"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>${projName}</name>`;
+        kml += `<Placemark><name>Track</name><LineString><coordinates>${gpxPoints.map(p => `${p.lon},${p.lat},${p.ele}`).join(' ')}</coordinates></LineString></Placemark>`;
+
+        for (let m of rawMediaFiles) {
+            const path = `media/${m.file.name}`;
+            const desc = m.isVideo ? `<video src="${path}" width="400" controls/>` : `<img src="${path}" width="400"/>`;
+            kml += `<Placemark><name>${m.file.name}</name><description><![CDATA[${desc}]]></description><Point><coordinates>${m.lon},${m.lat},${m.ele}</coordinates></Point></Placemark>`;
+            zip.file(path, await m.file.arrayBuffer());
+        }
+        kml += `</Document></kml>`;
+        zip.file("doc.kml", kml);
+        const blob = await zip.generateAsync({type:"blob"});
+        const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `${projName}.kmz`; a.click();
     };
 
     function initChart(pts) {
