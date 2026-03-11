@@ -32,18 +32,19 @@
 
     <div id="log-console">系統日誌：等待導入裝有檔案的資料夾 (Folder)...</div>
 
-    <div class="section-title">1. 時間校準設定</div>
+    <div class="section-title">1. 時間校準設定 (GPX 預設 UTC+0)</div>
     <div class="control-group">
         <label>媒體時間讀取來源</label>
         <select id="timeSrc">
             <option value="name" selected>依據檔案名稱 (YYYYMMDD_HHMMSS)</option>
             <option value="sys">依據檔案建立時間 (Creation Time)</option>
         </select>
-        <label style="margin-top:10px;">相機/手機時區 (用於對齊 UTC GPX)</label>
+        <label style="margin-top:10px;">媒體拍攝地時區 (對齊航跡用)</label>
         <select id="mediaTz">
             <option value="8" selected>UTC +8 (台灣 / 日本-1)</option>
-            <option value="0">UTC +0 (格林威治)</option>
+            <option value="0">UTC +0 (標準/格林威治)</option>
             <option value="2">UTC +2 (歐洲夏令時)</option>
+            <option value="-8">UTC -8 (美國太平洋)</option>
         </select>
     </div>
 
@@ -84,14 +85,13 @@
         c.scrollTop = c.scrollHeight;
     }
 
-    // 解析媒體時間
     function parseMediaTime(file, source) {
         if (source === 'name') {
             const regex = /(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/;
             const m = file.name.match(regex);
             if (m) return new Date(m[1], m[2]-1, m[3], m[4], m[5], m[6]).getTime();
         }
-        return file.lastModified; // 檔案建立/修改時間
+        return file.lastModified; 
     }
 
     document.getElementById('dirInput').onchange = async (e) => {
@@ -110,7 +110,7 @@
         gpxPoints = []; trackGroup.clearLayers(); photoGroup.clearLayers(); leaderLines.clearLayers();
         document.getElementById('file-list').innerHTML = '';
 
-        // 1. 解析 GPX (保持原始 UTC+0)
+        // 1. 解析 GPX (航跡永遠保持 UTC+0 物理紀錄)
         for (let f of gpxFiles) {
             const xml = new DOMParser().parseFromString(await f.text(), "text/xml");
             const trkpts = Array.from(xml.getElementsByTagName("trkpt"));
@@ -118,11 +118,12 @@
             const pts = trkpts.map((pt, i) => {
                 const lat = parseFloat(pt.getAttribute("lat")), lon = parseFloat(pt.getAttribute("lon"));
                 const ele = pt.getElementsByTagName("ele")[0] ? parseFloat(pt.getElementsByTagName("ele")[0].textContent) : 0;
-                // Garmin 預設是 UTC+0
+                // 直接讀取原始 UTC 時間戳
                 const time = new Date(pt.getElementsByTagName("time")[0].textContent).getTime();
                 if (i > 0) {
-                    const prev = {lat: parseFloat(trkpts[i-1].getAttribute("lat")), lon: parseFloat(trkpts[i-1].getAttribute("lon"))};
-                    dist += map.distance([prev.lat, prev.lon], [lat, lon]) / 1000;
+                    const prevLat = parseFloat(trkpts[i-1].getAttribute("lat"));
+                    const prevLon = parseFloat(trkpts[i-1].getAttribute("lon"));
+                    dist += map.distance([prevLat, prevLon], [lat, lon]) / 1000;
                 }
                 return { lat, lon, ele, time, dist };
             });
@@ -130,11 +131,10 @@
             L.polyline(pts.map(p => [p.lat, p.lon]), {color: '#3498db', weight: 4}).addTo(trackGroup);
         }
 
-        // 2. 對位媒體 (將媒體時間轉為 UTC 以對齊 GPX)
+        // 2. 對位媒體 (將媒體時間轉為 UTC 以匹配航跡)
         const locationMap = new Map();
         for (let f of mediaFiles) {
             let pTimeLocal = parseMediaTime(f, timeSrc);
-            // 將照片當地時間轉為 UTC 基準來找 GPX
             let pTimeUtc = pTimeLocal - mediaTzOffset;
             
             const url = URL.createObjectURL(f);
@@ -165,7 +165,12 @@
             if(isOk) div.onclick = () => map.flyTo([closest.lat, closest.lon], 17);
             document.getElementById('file-list').appendChild(div);
         }
-        if (gpxPoints.length > 0) { map.fitBounds(trackGroup.getBounds()); initChart(gpxPoints); document.getElementById('exportBtn').style.display = 'block'; log(`導入完成！已自動對位。`); }
+        if (gpxPoints.length > 0) { 
+            map.fitBounds(trackGroup.getBounds()); 
+            initChart(gpxPoints); 
+            document.getElementById('exportBtn').style.display = 'block'; 
+            log(`導入完成！航跡與媒體已同步。`); 
+        }
     };
 
     function initChart(pts) {
